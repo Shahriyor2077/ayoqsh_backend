@@ -1,0 +1,81 @@
+import { Controller, Get, Post, Put, Body, Param, Query, ParseIntPipe, Res, UseGuards } from "@nestjs/common";
+import { Response } from "express";
+import { ChecksService } from "./checks.service";
+import { CreateCheckDto, UseCheckDto } from "./dto/check.dto";
+import { QrService } from "./qr.service";
+import { JwtAuthGuard } from "../auth/jwt-auth.guard";
+import { RolesGuard } from "../auth/roles.guard";
+import { Roles } from "../auth/decorators";
+
+@Controller("api/checks")
+export class ChecksController {
+    constructor(
+        private checksService: ChecksService,
+        private qrService: QrService
+    ) { }
+
+    @Get()
+    findAll(
+        @Query("stationId") stationId?: string,
+        @Query("status") status?: string,
+        @Query("operatorId") operatorId?: string
+    ) {
+        return this.checksService.findAll({
+            stationId: stationId ? parseInt(stationId) : undefined,
+            status,
+            operatorId: operatorId ? parseInt(operatorId) : undefined,
+        });
+    }
+
+    @Get("code/:code")
+    findByCode(@Param("code") code: string) {
+        return this.checksService.findByCode(code);
+    }
+
+    @Get("operator/:id/stats")
+    getOperatorStats(@Param("id", ParseIntPipe) id: number) {
+        return this.checksService.getOperatorDailyStats(id);
+    }
+
+    @Get(":id/qr")
+    async getQrCode(@Param("id", ParseIntPipe) id: number) {
+        return this.checksService.getQrCode(id);
+    }
+
+    @Get(":id/qr/image")
+    async getQrCodeImage(@Param("id", ParseIntPipe) id: number, @Res() res: Response) {
+        const check = await this.checksService.getQrCode(id);
+        if (!check || !check.qrCode) {
+            return res.status(404).send("QR kod topilmadi");
+        }
+
+        const base64Data = check.qrCode.replace(/^data:image\/png;base64,/, "");
+        const buffer = Buffer.from(base64Data, "base64");
+
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Content-Disposition", `inline; filename="check-${check.code}.png"`);
+        return res.send(buffer);
+    }
+
+    @Post()
+    create(@Body() dto: CreateCheckDto) {
+        return this.checksService.create(dto);
+    }
+
+    @Post("use")
+    useCheck(@Body() dto: UseCheckDto) {
+        return this.checksService.useCheck(dto);
+    }
+
+    @Put(":id/cancel")
+    cancelCheck(@Param("id", ParseIntPipe) id: number) {
+        return this.checksService.cancelCheck(id);
+    }
+
+    @Put(":id/confirm")
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles("moderator", "operator")
+    confirmCheck(@Param("id", ParseIntPipe) id: number) {
+        return this.checksService.confirmCheck(id);
+    }
+}

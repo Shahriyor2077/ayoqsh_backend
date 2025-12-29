@@ -1,0 +1,113 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  moderator
+  operator
+  customer
+}
+
+enum CheckStatus {
+  pending
+  used
+  expired
+  cancelled
+}
+
+model Station {
+  id        Int      @id @default(autoincrement())
+  name      String
+  address   String?
+  phone     String?
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  operators User[]
+  checks    Check[]
+
+  @@map("stations")
+}
+
+model User {
+  id               Int      @id @default(autoincrement())
+  username         String?  @unique
+  password         String?
+  fullName         String?  @map("full_name")
+  phone            String?  @unique
+  telegramId       String?  @unique @map("telegram_id")
+  telegramUsername String?  @map("telegram_username")
+  role             Role     @default(customer)
+  balanceLiters    Decimal  @default(0) @map("balance_liters") @db.Decimal(10, 2)
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  stationId Int?     @map("station_id")
+  station   Station? @relation(fields: [stationId], references: [id])
+
+  createdChecks    Check[]       @relation("OperatorChecks")
+  usedChecks       Check[]       @relation("CustomerChecks")
+  sentMessages     Message[]     @relation("SentMessages")
+  receivedMessages UserMessage[]
+
+  @@map("users")
+}
+
+model Check {
+  id           Int         @id @default(autoincrement())
+  code         String      @unique
+  qrCode       String?     @map("qr_code")
+  amountLiters Decimal     @map("amount_liters") @db.Decimal(10, 2)
+  status       CheckStatus @default(pending)
+
+  customerName    String? @map("customer_name")
+  customerPhone   String? @map("customer_phone")
+  customerAddress String? @map("customer_address")
+
+  operatorId Int  @map("operator_id")
+  operator   User @relation("OperatorChecks", fields: [operatorId], references: [id])
+
+  stationId Int     @map("station_id")
+  station   Station @relation(fields: [stationId], references: [id])
+
+  customerId Int?      @map("customer_id")
+  customer   User?     @relation("CustomerChecks", fields: [customerId], references: [id])
+  usedAt     DateTime? @map("used_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at")
+
+  @@map("checks")
+}
+
+model Message {
+  id        Int      @id @default(autoincrement())
+  title     String
+  content   String
+  senderId  Int      @map("sender_id")
+  sender    User     @relation("SentMessages", fields: [senderId], references: [id])
+  isGlobal  Boolean  @default(true) @map("is_global")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  recipients UserMessage[]
+
+  @@map("messages")
+}
+
+model UserMessage {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  user      User      @relation(fields: [userId], references: [id])
+  messageId Int       @map("message_id")
+  message   Message   @relation(fields: [messageId], references: [id])
+  isRead    Boolean   @default(false) @map("is_read")
+  readAt    DateTime? @map("read_at")
+
+  @@unique([userId, messageId])
+  @@map("user_messages")
+}
