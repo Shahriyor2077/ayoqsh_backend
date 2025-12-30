@@ -13,11 +13,23 @@ export class UsersService {
             where: role ? { role } : undefined,
             include: {
                 station: { select: { id: true, name: true } },
+                // Mijozlar uchun oxirgi ishlatilgan chek orqali shaxobchani olish
+                usedChecks: {
+                    select: {
+                        station: { select: { id: true, name: true } },
+                    },
+                    orderBy: { createdAt: "desc" },
+                    take: 1,
+                },
             },
             orderBy: { createdAt: "desc" },
         });
 
-        return users.map(({ password, ...user }) => user);
+        return users.map(({ password, usedChecks, ...user }) => ({
+            ...user,
+            // Mijozlar uchun oxirgi chek shaxobchasini qo'shish
+            lastStation: usedChecks?.[0]?.station || null,
+        }));
     }
 
     async findOne(id: number) {
