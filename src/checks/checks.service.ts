@@ -49,33 +49,79 @@ export class ChecksService {
         });
     }
 
+    private normalizePhone(phone: string): string {
+        // Telefon raqamidan faqat raqamlarni olish va oxirgi 9 ta raqamni qaytarish
+        const digits = phone.replace(/\D/g, "");
+        return digits.slice(-9);
+    }
+
     async create(dto: CreateCheckDto) {
         const code = this.generateCode();
 
+        // QR kod generatsiya qilish
         const botUsername = this.configService.get<string>("BOT_USERNAME") || "ayoqsh_bot";
         const telegramLink = `https://t.me/${botUsername}?start=check_${code}`;
-
         const qrCode = await this.qrService.generateQRCode(telegramLink);
 
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + 30);
 
-        return this.prisma.check.create({
-            data: {
-                code,
-                qrCode,
-                amountLiters: dto.amountLiters,
-                operatorId: dto.operatorId,
-                stationId: dto.stationId,
-                customerName: dto.customerName,
-                customerPhone: dto.customerPhone,
-                customerAddress: dto.customerAddress,
-                expiresAt,
-            },
-            include: {
-                station: { select: { name: true } },
+        // Telefon raqamini normallashtirish
+        const normalizedPhone = this.normalizePhone(dto.customerPhone || "");
+
+        // Mijozni telefon raqami bo'yicha topish (turli formatlarni tekshirish)
+        let customer = await this.prisma.user.findFirst({
+            where: {
+                OR: [
+                    { phone: dto.customerPhone },
+                    { phone: { endsWith: normalizedPhone } },
+                    { phone: `+998${normalizedPhone}` },
+                    { phone: `998${normalizedPhone}` },
+                ],
             },
         });
+
+        if (!customer) {
+            customer = await this.prisma.user.create({
+                data: {
+                    phone: dto.customerPhone,
+                    fullName: dto.customerName,
+                    role: "customer",
+                    balanceLiters: 0,
+                },
+            });
+        }
+
+        // Chek yaratish va mijoz balansini yangilash (darhol ishlatilgan holda)
+        const [check] = await this.prisma.$transaction([
+            this.prisma.check.create({
+                data: {
+                    code,
+                    qrCode,
+                    amountLiters: dto.amountLiters,
+                    operatorId: dto.operatorId,
+                    stationId: dto.stationId,
+                    customerName: dto.customerName,
+                    customerPhone: dto.customerPhone,
+                    customerAddress: dto.customerAddress,
+                    customerId: customer.id,
+                    status: "used",
+                    usedAt: new Date(),
+                    expiresAt,
+                },
+                include: {
+                    station: { select: { name: true } },
+                },
+            }),
+            this.prisma.user.update({
+                where: { id: customer.id },
+                data: {
+                    balanceLiters: { increment: dto.amountLiters },
+                },
+            }),
+        ]);
+
+        return check;
     }
 
     async useCheck(dto: UseCheckDto) {
