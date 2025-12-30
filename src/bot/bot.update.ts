@@ -5,8 +5,11 @@ import { BotService } from "./bot.service";
 interface SessionContext extends Context {
     session?: {
         step?: "awaiting_phone" | "awaiting_code" | "main_menu";
+        pendingCheckCode?: string;
     };
 }
+
+const pendingChecks = new Map<string, string>();
 
 @Update()
 export class BotUpdate {
@@ -38,6 +41,8 @@ export class BotUpdate {
 
         if (!user) {
             if (payload && payload.startsWith("check_")) {
+                const checkCode = payload.replace("check_", "");
+                pendingChecks.set(telegramId, checkCode);
                 await ctx.reply(
                     "🎉 *AYoQSH Loyiha botiga xush kelibsiz!*\n\n⚠️ Chekni ishlatish uchun avval ro'yxatdan o'ting.\n\nTelefon raqamingizni yuboring:",
                     { parse_mode: "Markdown", reply_markup: this.phoneMenu.reply_markup }
@@ -91,6 +96,19 @@ export class BotUpdate {
             fullName,
             phone,
         });
+
+        const pendingCheckCode = pendingChecks.get(telegramId);
+
+        if (pendingCheckCode) {
+            pendingChecks.delete(telegramId);
+            await ctx.reply(
+                `✅ *Ro'yxatdan o'tdingiz!*\n\n👤 ${user.fullName}\n📞 ${user.phone}`,
+                { parse_mode: "Markdown" }
+            );
+            await ctx.reply("⏳ Chek tekshirilmoqda...");
+            await this.processCheckCode(ctx, user, pendingCheckCode);
+            return;
+        }
 
         await ctx.reply(
             `✅ *Ro'yxatdan o'tdingiz!*\n\n👤 ${user.fullName}\n📞 ${user.phone}\n💧 Balans: 0 litr`,
