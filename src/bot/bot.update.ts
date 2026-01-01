@@ -2,13 +2,17 @@ import { Update, Ctx, Start, Hears, On, Message } from "nestjs-telegraf";
 import { Context, Markup } from "telegraf";
 import { BotService } from "./bot.service";
 
-interface SessionContext extends Context {
-    session?: {
-        step?: "awaiting_phone" | "awaiting_code" | "main_menu";
-        pendingCheckCode?: string;
-    };
+interface SessionData {
+    step?: "awaiting_phone" | "awaiting_name" | "awaiting_code" | "main_menu";
+    pendingCheckCode?: string;
+    phone?: string;
 }
 
+interface SessionContext extends Context {
+    session?: SessionData;
+}
+
+const userSessions = new Map<string, SessionData>();
 const pendingChecks = new Map<string, string>();
 
 @Update()
@@ -73,7 +77,6 @@ export class BotUpdate {
     async onContact(@Ctx() ctx: SessionContext, @Message() msg: any) {
         const telegramId = ctx.from?.id.toString();
         const phone = msg.contact?.phone_number;
-        const fullName = [ctx.from?.first_name, ctx.from?.last_name].filter(Boolean).join(" ");
         const telegramUsername = ctx.from?.username;
 
         if (!telegramId || !phone) return;
@@ -90,29 +93,17 @@ export class BotUpdate {
             return;
         }
 
-        const user = await this.botService.createUser({
-            telegramId,
-            telegramUsername,
-            fullName,
+        // Telefon raqamni saqlash va ism so'rash
+        const session: SessionData = {
+            step: "awaiting_name",
             phone,
-        });
-
-        const pendingCheckCode = pendingChecks.get(telegramId);
-
-        if (pendingCheckCode) {
-            pendingChecks.delete(telegramId);
-            await ctx.reply(
-                `✅ *Ro'yxatdan o'tdingiz!*\n\n👤 ${user.fullName}\n📞 ${user.phone}`,
-                { parse_mode: "Markdown" }
-            );
-            await ctx.reply("⏳ Chek tekshirilmoqda...");
-            await this.processCheckCode(ctx, user, pendingCheckCode);
-            return;
-        }
+            pendingCheckCode: pendingChecks.get(telegramId),
+        };
+        userSessions.set(telegramId, session);
 
         await ctx.reply(
-            `✅ *Ro'yxatdan o'tdingiz!*\n\n👤 ${user.fullName}\n📞 ${user.phone}\n💧 Balans: 0 litr`,
-            { parse_mode: "Markdown", reply_markup: this.mainMenu.reply_markup }
+            "📝 *Ism va familiyangizni kiriting:*\n\nMasalan: Alisher Navoiy",
+            { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
         );
     }
 
@@ -180,6 +171,43 @@ export class BotUpdate {
 
         const telegramId = ctx.from?.id.toString();
         if (!telegramId) return;
+
+        // Ism kutilayotgan bo'lsa
+        const session = userSessions.get(telegramId);
+        if (session?.step === "awaiting_name" && session.phone) {
+            const fullName = text.trim();
+            if (fullName.length < 3) {
+                await ctx.reply("❌ Ism juda qisqa. Iltimos, to'liq ism va familiyangizni kiriting.");
+                return;
+            }
+
+            const telegramUsername = ctx.from?.username;
+            const user = await this.botService.createUser({
+                telegramId,
+                telegramUsername,
+                fullName,
+                phone: session.phone,
+            });
+
+            userSessions.delete(telegramId);
+
+            if (session.pendingCheckCode) {
+                pendingChecks.delete(telegramId);
+                await ctx.reply(
+                    `✅ *Ro'yxatdan o'tdingiz!*\n\n👤 ${user.fullName}\n📞 ${user.phone}`,
+                    { parse_mode: "Markdown" }
+                );
+                await ctx.reply("⏳ Chek tekshirilmoqda...");
+                await this.processCheckCode(ctx, user, session.pendingCheckCode);
+                return;
+            }
+
+            await ctx.reply(
+                `✅ *Ro'yxatdan o'tdingiz!*\n\n👤 ${user.fullName}\n📞 ${user.phone}\n💧 Balans: 0 litr`,
+                { parse_mode: "Markdown", reply_markup: this.mainMenu.reply_markup }
+            );
+            return;
+        }
 
         const user = await this.botService.findUserByTelegramId(telegramId);
         if (!user) {

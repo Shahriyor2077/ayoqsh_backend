@@ -4,6 +4,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { CreateCheckDto, UseCheckDto } from "./dto/check.dto";
 import { QrService } from "./qr.service";
 import { randomBytes } from "crypto";
+import * as ExcelJS from "exceljs";
 
 @Injectable()
 export class ChecksService {
@@ -66,66 +67,71 @@ export class ChecksService {
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + 30);
 
-        // Telefon raqamini normallashtirish
-        const normalizedPhone = this.normalizePhone(dto.customerPhone || "");
+        let customerId: number | null = null;
 
-        // Mijozni telefon raqami bo'yicha topish (turli formatlarni tekshirish)
-        let customer = await this.prisma.user.findFirst({
-            where: {
-                OR: [
-                    { phone: dto.customerPhone },
-                    { phone: { endsWith: normalizedPhone } },
-                    { phone: `+998${normalizedPhone}` },
-                    { phone: `998${normalizedPhone}` },
-                ],
-            },
-        });
+        // Faqat telefon raqami bo'lsa mijozni topish/yaratish
+        if (dto.customerPhone && dto.customerPhone.trim()) {
+            // Telefon raqamini normallashtirish
+            const normalizedPhone = this.normalizePhone(dto.customerPhone);
 
-        if (!customer) {
-            customer = await this.prisma.user.create({
-                data: {
-                    phone: dto.customerPhone,
-                    fullName: dto.customerName,
-                    role: "customer",
-                    balanceLiters: 0,
+            // Mijozni telefon raqami bo'yicha topish (turli formatlarni tekshirish)
+            let customer = await this.prisma.user.findFirst({
+                where: {
+                    OR: [
+                        { phone: dto.customerPhone },
+                        { phone: { endsWith: normalizedPhone } },
+                        { phone: `+998${normalizedPhone}` },
+                        { phone: `998${normalizedPhone}` },
+                    ],
                 },
             });
+
+            if (!customer) {
+                customer = await this.prisma.user.create({
+                    data: {
+                        phone: dto.customerPhone,
+                        fullName: dto.customerName,
+                        role: "customer",
+                        balanceLiters: 0,
+                    },
+                });
+            }
+            customerId = customer.id;
+
+            // Agar autoUse bo'lsa - darhol balansga qo'shish
+            if (dto.autoUse) {
+                const [check] = await this.prisma.$transaction([
+                    this.prisma.check.create({
+                        data: {
+                            code,
+                            qrCode,
+                            amountLiters: dto.amountLiters,
+                            operatorId: dto.operatorId,
+                            stationId: dto.stationId,
+                            customerName: dto.customerName,
+                            customerPhone: dto.customerPhone,
+                            customerAddress: dto.customerAddress,
+                            customerId: customer.id,
+                            status: "used",
+                            usedAt: new Date(),
+                            expiresAt,
+                        },
+                        include: {
+                            station: { select: { name: true } },
+                        },
+                    }),
+                    this.prisma.user.update({
+                        where: { id: customer.id },
+                        data: {
+                            balanceLiters: { increment: dto.amountLiters },
+                        },
+                    }),
+                ]);
+                return check;
+            }
         }
 
-        // Chek yaratish
-        if (dto.autoUse) {
-            // Qayta qo'shish - darhol used va balansga qo'shish
-            const [check] = await this.prisma.$transaction([
-                this.prisma.check.create({
-                    data: {
-                        code,
-                        qrCode,
-                        amountLiters: dto.amountLiters,
-                        operatorId: dto.operatorId,
-                        stationId: dto.stationId,
-                        customerName: dto.customerName,
-                        customerPhone: dto.customerPhone,
-                        customerAddress: dto.customerAddress,
-                        customerId: customer.id,
-                        status: "used",
-                        usedAt: new Date(),
-                        expiresAt,
-                    },
-                    include: {
-                        station: { select: { name: true } },
-                    },
-                }),
-                this.prisma.user.update({
-                    where: { id: customer.id },
-                    data: {
-                        balanceLiters: { increment: dto.amountLiters },
-                    },
-                }),
-            ]);
-            return check;
-        }
-
-        // Oddiy yaratish - kutilmoqda holatida
+        // Oddiy yaratish - kutilmoqda holatida (mijoz bo'lmasa ham)
         const check = await this.prisma.check.create({
             data: {
                 code,
@@ -133,10 +139,10 @@ export class ChecksService {
                 amountLiters: dto.amountLiters,
                 operatorId: dto.operatorId,
                 stationId: dto.stationId,
-                customerName: dto.customerName,
-                customerPhone: dto.customerPhone,
-                customerAddress: dto.customerAddress,
-                customerId: customer.id,
+                customerName: dto.customerName || null,
+                customerPhone: dto.customerPhone || null,
+                customerAddress: dto.customerAddress || null,
+                customerId,
                 status: "pending",
                 expiresAt,
             },
@@ -275,5 +281,96 @@ export class ChecksService {
         }
 
         return check;
+    }
+
+    async exportToExcel(startDate: Date, endDate: Date): Promise<Buffer> {
+        // Sana oralig'idagi cheklar
+        const checks = await this.prisma.check.findMany({
+            where: {
+                createdAt: {
+                    gte: startDate,
+                    lte: endDate,
+                },
+            },
+            include: {
+                customer: {
+                    select: {
+                        telegramId: true,
+                        fullName: true,
+                        phone: true,
+                        createdAt: true,
+                    },
+                },
+                station: { select: { name: true } },
+                operator: { select: { fullName: true } },
+            },
+            orderBy: { createdAt: "desc" },
+        });
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet("Cheklar");
+
+        // Ustun sarlavhalari
+        worksheet.columns = [
+            { header: "№", key: "index", width: 5 },
+            { header: "Telegram ID", key: "telegramId", width: 15 },
+            { header: "Ism Familiya", key: "fullName", width: 25 },
+            { header: "Telefon", key: "phone", width: 18 },
+            { header: "Chek kodi", key: "code", width: 12 },
+            { header: "Litr", key: "liters", width: 10 },
+            { header: "Chop etilgan sana", key: "createdAt", width: 18 },
+            { header: "Ro'yxatdan o'tgan sana", key: "usedAt", width: 18 },
+            { header: "Holat", key: "status", width: 12 },
+            { header: "Shaxobcha", key: "station", width: 20 },
+            { header: "Operator", key: "operator", width: 20 },
+        ];
+
+        // Sarlavha stilini o'zgartirish
+        worksheet.getRow(1).font = { bold: true };
+        worksheet.getRow(1).fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: "FF4472C4" },
+        };
+        worksheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+
+        // Ma'lumotlarni qo'shish
+        checks.forEach((check, index) => {
+            const statusMap: Record<string, string> = {
+                pending: "Kutilmoqda",
+                used: "Ishlatilgan",
+                expired: "Muddati o'tgan",
+                cancelled: "Bekor qilingan",
+            };
+
+            worksheet.addRow({
+                index: index + 1,
+                telegramId: check.customer?.telegramId || "-",
+                fullName: check.customer?.fullName || check.customerName || "-",
+                phone: check.customer?.phone || check.customerPhone || "-",
+                code: check.code,
+                liters: Number(check.amountLiters),
+                createdAt: check.createdAt.toLocaleString("uz-UZ"),
+                usedAt: check.usedAt ? check.usedAt.toLocaleString("uz-UZ") : "-",
+                status: statusMap[check.status] || check.status,
+                station: check.station?.name || "-",
+                operator: check.operator?.fullName || "-",
+            });
+        });
+
+        // Chegaralar qo'shish
+        worksheet.eachRow((row, rowNumber) => {
+            row.eachCell((cell) => {
+                cell.border = {
+                    top: { style: "thin" },
+                    left: { style: "thin" },
+                    bottom: { style: "thin" },
+                    right: { style: "thin" },
+                };
+            });
+        });
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        return Buffer.from(buffer);
     }
 }

@@ -14,6 +14,27 @@ export class ChecksController {
         private qrService: QrService
     ) { }
 
+    @Get("export/excel")
+    async exportExcel(
+        @Query("startDate") startDate: string,
+        @Query("endDate") endDate: string,
+        @Res() res: Response
+    ) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+
+        const buffer = await this.checksService.exportToExcel(start, end);
+
+        const filename = `cheklar_${startDate}_${endDate}.xlsx`;
+
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+        res.send(buffer);
+    }
+
     @Get()
     findAll(
         @Query("stationId") stationId?: string,
