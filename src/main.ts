@@ -14,4 +14,10 @@ async function bootstrap() {
     console.log(`🚀 NestJS server running on http://localhost:${port}`);
 }
 
-bootstrap();
+bootstrap().catch((err) => {
+    console.error("❌ Server xatosi:", err.message);
+    // Bot xatosi bo'lsa ham server ishlashda davom etsin
+    if (err.message?.includes("409") || err.message?.includes("Conflict")) {
+        console.warn("⚠️ Telegram bot boshqa joyda ishlayapti. Bot o'chirildi, server davom etmoqda.");
+    }
+});

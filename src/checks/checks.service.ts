@@ -163,7 +163,8 @@ export class ChecksService {
             throw new NotFoundException("Chek topilmadi");
         }
 
-        if (check.status !== "pending") {
+        // pending yoki printed statusidagi cheklar ishlatilishi mumkin
+        if ((check.status as string) !== "pending" && (check.status as string) !== "printed") {
             throw new BadRequestException("Bu chek allaqachon ishlatilgan yoki bekor qilingan");
         }
 
@@ -214,6 +215,88 @@ export class ChecksService {
         });
     }
 
+    async deleteCheck(id: number) {
+        const check = await this.prisma.check.findUnique({ where: { id } });
+
+        if (!check) {
+            throw new NotFoundException("Chek topilmadi");
+        }
+
+        // Agar chek "used" bo'lsa va mijoz bor bo'lsa - balansdan ayirish
+        if (check.status === "used" && check.customerId) {
+            await this.prisma.$transaction([
+                this.prisma.check.delete({ where: { id } }),
+                this.prisma.user.update({
+                    where: { id: check.customerId },
+                    data: {
+                        balanceLiters: { decrement: check.amountLiters },
+                    },
+                }),
+            ]);
+            return { deleted: true, balanceUpdated: true };
+        }
+
+        // Oddiy o'chirish
+        await this.prisma.check.delete({ where: { id } });
+        return { deleted: true, balanceUpdated: false };
+    }
+
+    async reactivateCheck(id: number, amountLiters: number, operatorId: number) {
+        const originalCheck = await this.prisma.check.findUnique({
+            where: { id },
+            include: { customer: true, station: true },
+        });
+
+        if (!originalCheck) {
+            throw new NotFoundException("Chek topilmadi");
+        }
+
+        if (!originalCheck.customerId) {
+            throw new BadRequestException("Bu chekda mijoz mavjud emas");
+        }
+
+        // Yangi chek kodi va QR kod yaratish
+        const code = this.generateCode();
+        const botUsername = this.configService.get<string>("BOT_USERNAME") || "ayoqsh_bot";
+        const telegramLink = `https://t.me/${botUsername}?start=check_${code}`;
+        const qrCode = await this.qrService.generateQRCode(telegramLink);
+
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + 30);
+
+        // Yangi chek yaratish (used holati) va mijoz balansiga qo'shish
+        const [newCheck] = await this.prisma.$transaction([
+            this.prisma.check.create({
+                data: {
+                    code,
+                    qrCode,
+                    amountLiters,
+                    operatorId,
+                    stationId: originalCheck.stationId,
+                    customerName: originalCheck.customerName,
+                    customerPhone: originalCheck.customerPhone,
+                    customerAddress: originalCheck.customerAddress,
+                    customerId: originalCheck.customerId,
+                    status: "used",
+                    usedAt: new Date(),
+                    expiresAt,
+                },
+                include: {
+                    customer: { select: { id: true, fullName: true, phone: true, balanceLiters: true } },
+                    station: { select: { id: true, name: true } },
+                },
+            }),
+            this.prisma.user.update({
+                where: { id: originalCheck.customerId },
+                data: {
+                    balanceLiters: { increment: amountLiters },
+                },
+            }),
+        ]);
+
+        return newCheck;
+    }
+
     async confirmCheck(id: number) {
         const check = await this.prisma.check.findUnique({ where: { id } });
 
@@ -233,11 +316,11 @@ export class ChecksService {
             throw new BadRequestException("Chek muddati tugagan");
         }
 
+        // Chop etilgan statusiga o'zgartirish
         return this.prisma.check.update({
             where: { id },
             data: {
-                status: "used",
-                usedAt: new Date(),
+                status: "printed" as any,
             },
         });
     }
@@ -338,6 +421,7 @@ export class ChecksService {
         checks.forEach((check, index) => {
             const statusMap: Record<string, string> = {
                 pending: "Kutilmoqda",
+                printed: "Chop etilgan",
                 used: "Ishlatilgan",
                 expired: "Muddati o'tgan",
                 cancelled: "Bekor qilingan",

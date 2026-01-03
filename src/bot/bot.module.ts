@@ -10,12 +10,19 @@ import { PrismaModule } from "../prisma/prisma.module";
         PrismaModule,
         TelegrafModule.forRootAsync({
             imports: [ConfigModule],
-            useFactory: (configService: ConfigService) => ({
-                token: configService.get<string>("BOT_TOKEN") || "",
-                launchOptions: {
-                    webhook: undefined,
-                },
-            }),
+            useFactory: (configService: ConfigService) => {
+                const token = configService.get<string>("BOT_TOKEN");
+                if (!token) {
+                    console.warn("⚠️ BOT_TOKEN topilmadi - bot ishlamaydi");
+                }
+                return {
+                    token: token || "dummy_token",
+                    launchOptions: token ? {
+                        webhook: undefined,
+                        dropPendingUpdates: true, // Eski xabarlarni o'tkazib yuborish
+                    } : false, // Token bo'lmasa botni ishga tushirmaslik
+                };
+            },
             inject: [ConfigService],
         }),
     ],

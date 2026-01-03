@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Body, Param, Query, ParseIntPipe, Res, UseGuards } from "@nestjs/common";
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, ParseIntPipe, Res, UseGuards } from "@nestjs/common";
 import { Response } from "express";
 import { ChecksService } from "./checks.service";
 import { CreateCheckDto, UseCheckDto } from "./dto/check.dto";
@@ -98,5 +98,23 @@ export class ChecksController {
     @Roles("moderator", "operator")
     confirmCheck(@Param("id", ParseIntPipe) id: number) {
         return this.checksService.confirmCheck(id);
+    }
+
+    @Put(":id/reactivate")
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles("moderator", "operator")
+    reactivateCheck(
+        @Param("id", ParseIntPipe) id: number,
+        @Body("amountLiters") amountLiters: number,
+        @Body("operatorId") operatorId: number
+    ) {
+        return this.checksService.reactivateCheck(id, amountLiters, operatorId);
+    }
+
+    @Delete(":id")
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles("moderator")
+    deleteCheck(@Param("id", ParseIntPipe) id: number) {
+        return this.checksService.deleteCheck(id);
     }
 }
