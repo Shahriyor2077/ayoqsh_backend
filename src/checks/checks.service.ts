@@ -163,8 +163,8 @@ export class ChecksService {
             throw new NotFoundException("Chek topilmadi");
         }
 
-        // pending yoki printed statusidagi cheklar ishlatilishi mumkin
-        if ((check.status as string) !== "pending" && (check.status as string) !== "printed") {
+        // Faqat pending statusidagi cheklar ishlatilishi mumkin
+        if (check.status !== "pending") {
             throw new BadRequestException("Bu chek allaqachon ishlatilgan yoki bekor qilingan");
         }
 
@@ -304,23 +304,11 @@ export class ChecksService {
             throw new NotFoundException("Chek topilmadi");
         }
 
-        if (check.status !== "pending") {
-            throw new BadRequestException("Faqat kutilayotgan chekni tasdiqlash mumkin");
-        }
-
-        if (new Date() > check.expiresAt) {
-            await this.prisma.check.update({
-                where: { id },
-                data: { status: "expired" },
-            });
-            throw new BadRequestException("Chek muddati tugagan");
-        }
-
-        // Chop etilgan statusiga o'zgartirish
+        // Chekni chop etilgan deb belgilash (status o'zgarmaydi)
         return this.prisma.check.update({
             where: { id },
             data: {
-                status: "printed" as any,
+                isPrinted: true,
             },
         });
     }
